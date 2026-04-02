@@ -1,0 +1,27 @@
+name: Build Elite Othello EXE
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Compile Othello
+        run: |
+          cl.exe /O2 /MT /EHsc main.cpp /Fe:Othello_Elite.exe user32.lib gdi32.lib shell32.lib /link /SUBSYSTEM:WINDOWS
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: Othello-Windows-Executable
+          path: Othello_Elite.exe
