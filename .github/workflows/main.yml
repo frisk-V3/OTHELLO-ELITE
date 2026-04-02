@@ -1,4 +1,4 @@
-name: Build Elite Othello EXE
+name: Build Direct2D Othello
 
 on:
   push:
@@ -8,21 +8,13 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Compile Othello
-        # /std:c++17 を追加して構造体束縛のエラーを解消
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Compile
         run: |
-          cl.exe /O2 /MT /EHsc /std:c++17 main.cpp /Fe:Othello_Elite.exe user32.lib gdi32.lib shell32.lib /link /SUBSYSTEM:WINDOWS
-
-      - name: Upload EXE
-        uses: actions/upload-artifact@v4
+          cl.exe /O2 /MT /EHsc /std:c++17 main.cpp /Fe:Othello_Direct2D.exe user32.lib gdi32.lib d2d1.lib /link /SUBSYSTEM:WINDOWS
+      - uses: actions/upload-artifact@v4
         with:
-          name: Othello-Windows-Executable
-          path: Othello_Elite.exe
+          name: Othello-D2D-Binary
+          path: Othello_Direct2D.exe
