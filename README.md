@@ -1,4 +1,4 @@
-# OTHELLO ELITE v2.0.0
+# OTHELLO ELITE 
 
 **OTHELLO ELITE** は、Win32 API と Direct2D を駆使して開発された、超高速・低遅延のデスクトップ・オセロゲームです。従来の GDI 描画を廃止し、GPU 加速による描画エンジンを搭載することで、一切の処理落ちを排除した「プロ仕様」の操作感を実現しました。
 
