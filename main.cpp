@@ -1,220 +1,124 @@
-#ifndef UNICODE
-#define UNICODE
-#endif
-
 #include <windows.h>
+#include <d2d1.h>
 #include <vector>
 #include <string>
-#include <fstream>
-#include <map>
-#include <algorithm>
 
-const int CELL_SIZE = 64;
-const int BOARD_MARGIN = 40;
+#pragma comment(lib, "d2d1.lib")
+
+// --- 定数・グローバル ---
 const int BOARD_SIZE = 8;
-const wchar_t* DATA_PATH = L"brain.dat";
+const float CELL_SIZE = 60.0f;
+const float MARGIN = 40.0f;
 
 enum class Space { EMPTY, BLACK, WHITE };
-enum class Scene { TITLE, GAME };
-
-// グローバル状態
 Space board[BOARD_SIZE][BOARD_SIZE];
-Space current_turn = Space::BLACK;
-Scene current_scene = Scene::TITLE;
-int cpu_level = 2;
-bool vs_cpu = true;
-std::map<int, int> player_habits;
+bool is_title = true;
 
-// プロトタイプ
-void ResetGame() {
-    for (int i = 0; i < BOARD_SIZE; i++)
-        for (int j = 0; j < BOARD_SIZE; j++) board[i][j] = Space::EMPTY;
-    board[3][3] = Space::WHITE; board[4][4] = Space::WHITE;
-    board[3][4] = Space::BLACK; board[4][3] = Space::BLACK;
-    current_turn = Space::BLACK;
-}
+// Direct2D インターフェース
+ID2D1Factory* pFactory = NULL;
+ID2D1HwndRenderTarget* pRT = NULL;
+ID2D1SolidColorBrush* pBrushBrush = NULL;
 
-void LoadHabit() {
-    std::ifstream ifs(DATA_PATH, std::ios::binary);
-    int pos, count;
-    while (ifs.read((char*)&pos, sizeof(pos)) && ifs.read((char*)&count, sizeof(count))) {
-        player_habits[pos] = count;
+// --- 初期化 ---
+HRESULT InitD2D(HWND hwnd) {
+    HRESULT hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &pFactory);
+    if (SUCCEEDED(hr)) {
+        RECT rc; GetClientRect(hwnd, &rc);
+        hr = pFactory->CreateHwndRenderTarget(
+            D2D1::RenderTargetProperties(),
+            D2D1::HwndRenderTargetProperties(hwnd, D2D1::SizeU(rc.right, rc.bottom)),
+            &pRT);
     }
+    return hr;
 }
 
-void SaveHabit(int r, int c) {
-    player_habits[r * 10 + c]++;
-    std::ofstream ofs(DATA_PATH, std::ios::binary);
-    for (auto const& [pos, count] : player_habits) {
-        ofs.write((char*)&pos, sizeof(pos));
-        ofs.write((char*)&count, sizeof(count));
-    }
+void CleanD2D() {
+    if (pRT) pRT->Release();
+    if (pFactory) pFactory->Release();
 }
 
-bool IsValid(int r, int c, Space s) {
-    if (r < 0 || r >= BOARD_SIZE || c < 0 || c >= BOARD_SIZE || board[r][c] != Space::EMPTY) return false;
-    for (int dr = -1; dr <= 1; dr++) {
-        for (int dc = -1; dc <= 1; dc++) {
-            if (dr == 0 && dc == 0) continue;
-            int nr = r + dr, nc = c + dc;
-            bool found_opp = false;
-            while (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] == (s == Space::BLACK ? Space::WHITE : Space::BLACK)) {
-                nr += dr; nc += dc; found_opp = true;
-            }
-            if (found_opp && nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] == s) return true;
-        }
-    }
-    return false;
-}
+// --- 描画ロジック ---
+void Render(HWND hwnd) {
+    if (!pRT) return;
 
-void Flip(int r, int c, Space s) {
-    board[r][c] = s;
-    for (int dr = -1; dr <= 1; dr++) {
-        for (int dc = -1; dc <= 1; dc++) {
-            if (dr == 0 && dc == 0) continue;
-            int nr = r + dr, nc = c + dc;
-            std::vector<std::pair<int, int>> targets;
-            while (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] == (s == Space::BLACK ? Space::WHITE : Space::BLACK)) {
-                targets.push_back({nr, nc});
-                nr += dr; nc += dc;
-            }
-            if (!targets.empty() && nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] == s) {
-                for (auto& p : targets) board[p.first][p.second] = s;
-            }
-        }
-    }
-}
+    pRT->BeginDraw();
+    pRT->Clear(D2D1::ColorF(0.1f, 0.1f, 0.12f)); // ダーク背景
 
-// --- ダブルバッファリング描画 ---
-void Render(HDC hdc, HWND hwnd) {
-    RECT rect;
-    GetClientRect(hwnd, &rect);
-    int width = rect.right - rect.left;
-    int height = rect.bottom - rect.top;
-
-    // メモリDCの作成
-    HDC memDC = CreateCompatibleDC(hdc);
-    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
-    SelectObject(memDC, memBitmap);
-
-    // 背景：目に優しいダークグレー
-    HBRUSH hBack = CreateSolidBrush(RGB(30, 30, 35));
-    FillRect(memDC, &rect, hBack);
-    DeleteObject(hBack);
-
-    if (current_scene == Scene::TITLE) {
-        SetBkMode(memDC, TRANSPARENT);
-        HFONT hTitleFont = CreateFont(80, 0, 0, 0, FW_HEAVY, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Verdana");
-        SelectObject(memDC, hTitleFont);
-        SetTextColor(memDC, RGB(255, 255, 255));
-        TextOut(memDC, 50, 100, L"OTHELLO", 7);
-        TextOut(memDC, 80, 180, L"ELITE", 5);
-        DeleteObject(hTitleFont);
-
-        HFONT hSubFont = CreateFont(22, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Consolas");
-        SelectObject(memDC, hSubFont);
-        SetTextColor(memDC, RGB(180, 180, 180));
-        TextOut(memDC, 60, 320, L"PRESS [1-3] FOR CPU  |  PRESS [P] FOR 2P", 40);
-        DeleteObject(hSubFont);
+    if (is_title) {
+        // タイトル描画（簡略化）
+        pRT->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &pBrushBrush);
+        pRT->DrawRectangle(D2D1::RectF(100, 100, 500, 200), pBrushBrush);
+        pBrushBrush->Release();
     } else {
-        // ボード描画
+        // 盤面描画
         for (int r = 0; r < BOARD_SIZE; r++) {
             for (int c = 0; c < BOARD_SIZE; c++) {
-                int x = BOARD_MARGIN + c * CELL_SIZE;
-                int y = BOARD_MARGIN + r * CELL_SIZE;
-                
-                // ガイド：黄土色 (RGB 200, 160, 50)
-                bool can_place = IsValid(r, c, current_turn);
-                COLORREF tileColor = can_place ? RGB(200, 160, 50) : RGB(40, 100, 60);
-                HBRUSH hBr = CreateSolidBrush(tileColor);
-                RECT rct = { x, y, x + CELL_SIZE, y + CELL_SIZE };
-                FillRect(memDC, &rct, hBr);
-                FrameRect(memDC, &rct, (HBRUSH)GetStockObject(BLACK_BRUSH));
-                DeleteObject(hBr);
+                D2D1_RECT_F rect = D2D1::RectF(
+                    MARGIN + c * CELL_SIZE, MARGIN + r * CELL_SIZE,
+                    MARGIN + (c + 1) * CELL_SIZE, MARGIN + (r + 1) * CELL_SIZE
+                );
+
+                pRT->CreateSolidColorBrush(D2D1::ColorF(0.1f, 0.4f, 0.2f), &pBrushBrush);
+                pRT->FillRectangle(rect, pBrushBrush);
+                pBrushBrush->Release();
+
+                pRT->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f), &pBrushBrush);
+                pRT->DrawRectangle(rect, pBrushBrush);
+                pBrushBrush->Release();
 
                 if (board[r][c] != Space::EMPTY) {
-                    HBRUSH sBr = CreateSolidBrush(board[r][c] == Space::BLACK ? RGB(10, 10, 10) : RGB(245, 245, 245));
-                    SelectObject(memDC, sBr);
-                    Ellipse(memDC, x + 8, y + 8, x + CELL_SIZE - 8, y + CELL_SIZE - 8);
-                    DeleteObject(sBr);
+                    D2D1_ELLIPSE ellipse = D2D1::Ellipse(
+                        D2D1::Point2F(rect.left + CELL_SIZE / 2, rect.top + CELL_SIZE / 2),
+                        CELL_SIZE / 2 - 5, CELL_SIZE / 2 - 5
+                    );
+                    pRT->CreateSolidColorBrush(
+                        board[r][c] == Space::BLACK ? D2D1::ColorF(0, 0, 0) : D2D1::ColorF(1, 1, 1),
+                        &pBrushBrush
+                    );
+                    pRT->FillEllipse(ellipse, pBrushBrush);
+                    pBrushBrush->Release();
                 }
             }
         }
-        SetTextColor(memDC, RGB(255, 255, 255));
-        std::wstring status = L"TURN: " + std::wstring(current_turn == Space::BLACK ? L"BLACK" : L"WHITE");
-        TextOut(memDC, BOARD_MARGIN, 10, status.c_str(), (int)status.length());
     }
 
-    // 画面へ一気に転送
-    BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
-
-    // 解放
-    DeleteObject(memBitmap);
-    DeleteDC(memDC);
+    pRT->EndDraw();
 }
 
+// --- ウィンドウプロシージャ ---
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
-    case WM_CREATE: LoadHabit(); return 0;
-    case WM_ERASEBKGND: return 1; // 背景消去を無視してフラッシュを防ぐ
-    case WM_CHAR:
-        if (current_scene == Scene::TITLE) {
-            if (wParam >= '1' && wParam <= '3') {
-                cpu_level = (int)(wParam - '0'); vs_cpu = true; current_scene = Scene::GAME; ResetGame();
-            } else if (wParam == 'p' || wParam == 'P') {
-                vs_cpu = false; current_scene = Scene::GAME; ResetGame();
-            }
-            InvalidateRect(hwnd, NULL, FALSE);
-        }
+    case WM_CREATE:
+        InitD2D(hwnd);
+        for(int i=0; i<4; i++) board[3+i/2][3+i%2] = (i==1||i==2)?Space::BLACK:Space::WHITE;
         return 0;
     case WM_LBUTTONDOWN:
-        if (current_scene == Scene::GAME) {
-            int c = (LOWORD(lParam) - BOARD_MARGIN) / CELL_SIZE;
-            int r = (HIWORD(lParam) - BOARD_MARGIN) / CELL_SIZE;
-            if (IsValid(r, c, current_turn)) {
-                Flip(r, c, current_turn);
-                if (current_turn == Space::BLACK) SaveHabit(r, c);
-                current_turn = (current_turn == Space::BLACK ? Space::WHITE : Space::BLACK);
-                InvalidateRect(hwnd, NULL, FALSE);
-                if (vs_cpu && current_turn == Space::WHITE) PostMessage(hwnd, WM_USER + 1, 0, 0);
-            }
+        is_title = false;
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    case WM_PAINT:
+        Render(hwnd);
+        ValidateRect(hwnd, NULL);
+        return 0;
+    case WM_SIZE:
+        if (pRT) {
+            RECT rc; GetClientRect(hwnd, &rc);
+            pRT->Resize(D2D1::SizeU(rc.right, rc.bottom));
         }
         return 0;
-    case WM_USER + 1:
-        Sleep(300);
-        {
-            std::vector<std::pair<int, int>> moves;
-            for(int r=0; r<BOARD_SIZE; r++) for(int c=0; c<BOARD_SIZE; c++)
-                if(IsValid(r, c, Space::WHITE)) moves.push_back({r, c});
-            if (!moves.empty()) {
-                std::sort(moves.begin(), moves.end(), [](auto a, auto b){ return (rand() % 2); });
-                Flip(moves[0].first, moves[0].second, Space::WHITE);
-            }
-            current_turn = Space::BLACK;
-            InvalidateRect(hwnd, NULL, FALSE);
-        }
+    case WM_DESTROY:
+        CleanD2D();
+        PostQuitMessage(0);
         return 0;
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        Render(hdc, hwnd);
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
-    case WM_DESTROY: PostQuitMessage(0); return 0;
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
 int WINAPI wWinMain(HINSTANCE hI, HINSTANCE, PWSTR, int nS) {
-    const wchar_t CN[] = L"OthelloElitePro";
-    WNDCLASS wc = {0}; wc.lpfnWndProc = WindowProc; wc.hInstance = hI; wc.lpszClassName = CN;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    RegisterClass(&wc);
-    HWND hwnd = CreateWindowEx(0, CN, L"OTHELLO ELITE PRO", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 650, NULL, NULL, hI, NULL);
+    WNDCLASS wc = {0}; wc.lpfnWndProc = WindowProc; wc.hInstance = hI; wc.lpszClassName = L"D2DOthello";
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW); RegisterClass(&wc);
+    HWND hwnd = CreateWindowEx(0, L"D2DOthello", L"Direct2D Elite Othello", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 600, 650, NULL, NULL, hI, NULL);
     ShowWindow(hwnd, nS);
-    UpdateWindow(hwnd); // 起動直後に描画を強制
-    MSG msg = {0};
-    while (GetMessage(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessage(&msg); }
+    MSG msg; while (GetMessage(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessage(&msg); }
     return 0;
 }
